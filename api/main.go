@@ -16,6 +16,7 @@ import (
 func main() {
 	mongoURIFlag := flag.String("mongo", "mongodb://localhost:27017", "Mongo address")
 	dbNameFlag := flag.String("db", "trotsek", "Mongo database name")
+	addrFlag := flag.String("addr", "localhost:12345", "Server address")
 	flag.Parse()
 
 	g, err := mongogroups.Groups(*mongoURIFlag, *dbNameFlag)
@@ -41,7 +42,7 @@ func main() {
 	r.Options("/", a.options)
 	a.r = setContentType(r)
 
-	http.ListenAndServe("localhost:12345", a.r)
+	http.ListenAndServe(*addrFlag, a.r)
 }
 
 func setContentType(h http.Handler) http.Handler {
@@ -49,10 +50,10 @@ func setContentType(h http.Handler) http.Handler {
 		res.Header().Add("Content-Type", "application/json")
 		h.ServeHTTP(res, req)
 
-		fmt.Printf("Response Headers:\n")
-		for h, v := range res.Header() {
-			fmt.Printf("  %s: %+v\n", h, v)
-		}
+		// fmt.Printf("Response Headers:\n")
+		// for h, v := range res.Header() {
+		// 	fmt.Printf("  %s: %+v\n", h, v)
+		// }
 
 	})
 } //setContentType
@@ -165,9 +166,7 @@ func (app *app) updGroup(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	fmt.Printf("Updating %+v", g)
 	if err := app.g.Upd(g); err != nil {
-		fmt.Printf("FAILED: %v\n", err)
 		http.Error(res, "update failed: "+err.Error(), http.StatusNotFound)
 		return
 	}
@@ -192,7 +191,7 @@ func (app *app) delGroup(res http.ResponseWriter, req *http.Request) {
 }
 
 func (app *app) unknown(res http.ResponseWriter, req *http.Request) {
-	fmt.Printf("ERROR: HTTP %s %s\n", req.Method, req.URL.Path)
+	fmt.Printf("Unknown: HTTP %s %s\n", req.Method, req.URL.Path)
 	http.Error(res, "unknown request", http.StatusNotFound)
 }
 
@@ -214,9 +213,7 @@ func (app *app) checkRequest(res http.ResponseWriter, req *http.Request) error {
 	if origin := req.Header.Get("Origin"); origin == "http://localhost:4200" || origin == "" {
 		//res.Header().Set("Access-Control-Allow-Origin", "*")
 		res.Header().Set("Access-Control-Allow-Origin", origin)
-		fmt.Printf("Allowing origin!\n")
 	} else {
-		fmt.Printf("***** NOT Allowing origin! *****\n")
 		return fmt.Errorf("origin:\"%s\" not allowed", origin)
 	}
 
@@ -226,7 +223,6 @@ func (app *app) checkRequest(res http.ResponseWriter, req *http.Request) error {
 	case "OPTIONS", "POST", "PUT", "DELETE", "GET":
 		res.Header().Set("Access-Control-Allow-Methods", "OPTIONS, POST, GET, PUT, DELETE")
 	default:
-		fmt.Printf("***** NOT Allowing method %s *****\n", method)
 		return fmt.Errorf("method:%s not allowed", method)
 	}
 
