@@ -27,7 +27,7 @@ func (g *Group) Validate() error {
 	return nil
 }
 
-const namePattern = `[a-zA-Z0-9]([a-zA-Z0-9 _\.\-][a-zA-Z0-9])*`
+const namePattern = `[a-zA-Z0-9]([a-zA-Z0-9 _\.\-]*[a-zA-Z0-9])?`
 
 var nameRegex = regexp.MustCompile(`^` + namePattern + `$`)
 
