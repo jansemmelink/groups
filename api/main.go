@@ -2,19 +2,29 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/gorilla/pat"
-	"github.com/satori/uuid"
-	"github.com/trotsek/groups"
+	"github.com/jansemmelink/groups"
+	mongogroups "github.com/jansemmelink/groups/mongo"
 )
 
 func main() {
+	mongoURIFlag := flag.String("mongo", "mongodb://localhost:27017", "Mongo address")
+	dbNameFlag := flag.String("db", "trotsek", "Mongo database name")
+	flag.Parse()
+
+	g, err := mongogroups.Groups(*mongoURIFlag, *dbNameFlag)
+	if err != nil {
+		panic(err)
+	}
 	a := &app{
-		groupByID: map[string]groups.Group{},
+		g: g,
+		//groupByID: map[string]groups.Group{},
 	}
 
 	//v1 API:
@@ -48,14 +58,11 @@ func setContentType(h http.Handler) http.Handler {
 } //setContentType
 
 type app struct {
-	sync.Mutex
-	r         http.Handler
-	groupByID map[string]groups.Group
+	r http.Handler
+	g groups.IGroups
 }
 
 func (app *app) getGroups(res http.ResponseWriter, req *http.Request) {
-	app.Lock()
-	defer app.Unlock()
 	log(req)
 
 	if err := app.checkRequest(res, req); err != nil {
@@ -63,21 +70,26 @@ func (app *app) getGroups(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	nameFilter := strings.ToUpper(req.URL.Query().Get("name"))
-	res.Header().Set("Content-Type", "application/json")
-	l := []groups.Group{}
-	for _, g := range app.groupByID {
-		if nameFilter == "" || strings.Index(strings.ToUpper(g.Name), nameFilter) >= 0 {
-			l = append(l, g)
+	filter := map[string]interface{}{}
+	name := strings.ToUpper(req.URL.Query().Get("name"))
+	if name != "" {
+		filter["name"] = name
+	}
+	size := req.URL.Query().Get("size")
+	sizeLimit := 10
+	if size != "" {
+		var err error
+		sizeLimit, err = strconv.Atoi(size)
+		if err != nil || sizeLimit <= 0 {
+			sizeLimit = 10
 		}
 	}
+	l := app.g.List(filter, sizeLimit, []string{"name"})
 	jsonList, _ := json.Marshal(l)
 	res.Write(jsonList)
 }
 
 func (app *app) newGroup(res http.ResponseWriter, req *http.Request) {
-	app.Lock()
-	defer app.Unlock()
 	log(req)
 
 	if err := app.checkRequest(res, req); err != nil {
@@ -101,12 +113,12 @@ func (app *app) newGroup(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if err := g.Validate(); err != nil {
-		http.Error(res, fmt.Sprintf("invalid group: %v", err), http.StatusBadRequest)
+	g, err := app.g.New(g)
+	if err != nil {
+		http.Error(res, fmt.Sprintf("failed to create: %v", err), http.StatusBadRequest)
 		return
 	}
-	g.ID = uuid.NewV1().String()
-	app.groupByID[g.ID] = g
+
 	jsonGroup, _ := json.Marshal(g)
 	res.Header().Set("Content-Type", "application/json")
 	res.Write(jsonGroup)
@@ -114,8 +126,6 @@ func (app *app) newGroup(res http.ResponseWriter, req *http.Request) {
 }
 
 func (app *app) getGroup(res http.ResponseWriter, req *http.Request) {
-	app.Lock()
-	defer app.Unlock()
 	log(req)
 
 	if err := app.checkRequest(res, req); err != nil {
@@ -124,8 +134,8 @@ func (app *app) getGroup(res http.ResponseWriter, req *http.Request) {
 	}
 
 	id := req.URL.Query().Get(":id")
-	if g, ok := app.groupByID[id]; ok {
-		jsonGroup, _ := json.Marshal(g)
+	if g, err := app.g.Get(id); err == nil && g != nil {
+		jsonGroup, _ := json.Marshal(*g)
 		res.Write(jsonGroup)
 		return
 	}
@@ -133,8 +143,6 @@ func (app *app) getGroup(res http.ResponseWriter, req *http.Request) {
 }
 
 func (app *app) updGroup(res http.ResponseWriter, req *http.Request) {
-	app.Lock()
-	defer app.Unlock()
 	log(req)
 
 	if err := app.checkRequest(res, req); err != nil {
@@ -157,23 +165,17 @@ func (app *app) updGroup(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if err := g.Validate(); err != nil {
-		http.Error(res, fmt.Sprintf("invalid group: %v", err), http.StatusBadRequest)
+	fmt.Printf("Updating %+v", g)
+	if err := app.g.Upd(g); err != nil {
+		fmt.Printf("FAILED: %v\n", err)
+		http.Error(res, "update failed: "+err.Error(), http.StatusNotFound)
 		return
 	}
-
-	if _, ok := app.groupByID[g.ID]; ok {
-		app.groupByID[g.ID] = g //replace with new data
-		jsonGroup, _ := json.Marshal(g)
-		res.Write(jsonGroup)
-		return
-	}
-	http.Error(res, "unknown id", http.StatusNotFound)
+	jsonGroup, _ := json.Marshal(g)
+	res.Write(jsonGroup)
 }
 
 func (app *app) delGroup(res http.ResponseWriter, req *http.Request) {
-	app.Lock()
-	defer app.Unlock()
 	log(req)
 
 	if err := app.checkRequest(res, req); err != nil {
@@ -182,15 +184,16 @@ func (app *app) delGroup(res http.ResponseWriter, req *http.Request) {
 	}
 
 	id := req.URL.Query().Get(":id")
-	if _, ok := app.groupByID[id]; ok {
-		delete(app.groupByID, id)
+	if err := app.g.Del(id); err != nil {
+		http.Error(res, "unknown id", http.StatusNotFound)
 		return
 	}
-	http.Error(res, "unknown id", http.StatusNotFound)
+	return
 }
 
 func (app *app) unknown(res http.ResponseWriter, req *http.Request) {
 	fmt.Printf("ERROR: HTTP %s %s\n", req.Method, req.URL.Path)
+	http.Error(res, "unknown request", http.StatusNotFound)
 }
 
 func (app *app) metrics(res http.ResponseWriter, req *http.Request) {
@@ -204,20 +207,6 @@ func (app *app) options(res http.ResponseWriter, req *http.Request) {
 		http.Error(res, "not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	// HTTP OPTIONS /groups/v1
-	// Origin: [http://localhost:4200]
-	// Sec-Fetch-Dest: [empty]
-	// User-Agent: [Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.97 Safari/537.36]
-	// Accept-Encoding: [gzip, deflate, br]
-	// Connection: [keep-alive]
-	// Accept: [*/*]
-	// Access-Control-Request-Method: [POST]
-	// Accept-Language: [en-GB,en-US;q=0.9,en;q=0.8]
-	// Access-Control-Request-Headers: [content-type]
-	// Sec-Fetch-Mode: [cors]
-	// Sec-Fetch-Site: [same-site]
-	// Referer: [http://localhost:4200/groups]
 }
 
 //check for simple GET/POST requests

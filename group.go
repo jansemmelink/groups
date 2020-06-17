@@ -2,6 +2,7 @@ package groups
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -20,7 +21,22 @@ func (g *Group) Validate() error {
 	if g.Name == "" {
 		return fmt.Errorf("missing name")
 	}
+	if !ValidName(g.Name) {
+		return fmt.Errorf("invalid name \"%s\"", g.Name)
+	}
 	return nil
+}
+
+const namePattern = `[a-zA-Z0-9]([a-zA-Z0-9 _\.\-][a-zA-Z0-9])*`
+
+var nameRegex = regexp.MustCompile(`^` + namePattern + `$`)
+
+//ValidName ...
+func ValidName(n string) bool {
+	if nameRegex.MatchString(n) {
+		return true
+	}
+	return false
 }
 
 // //Member ...
